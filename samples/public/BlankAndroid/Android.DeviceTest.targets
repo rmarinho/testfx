@@ -1,0 +1,166 @@
+<Project>
+  <!--
+    Android-specific targets for device testing with Microsoft.Testing.Platform.
+    This file should be imported by Android test projects or included in the Android SDK.
+  -->
+
+  <PropertyGroup Condition="$(TargetFramework.Contains('android'))">
+    <!-- Mark as Android device test project -->
+    <_IsAndroidTestProject>true</_IsAndroidTestProject>
+    
+    <!-- ADB tool path - use from Android SDK or PATH -->
+    <AdbToolPath Condition="'$(AdbToolPath)' == ''">adb</AdbToolPath>
+    
+    <!-- Device selection -->
+    <AndroidDevice Condition="'$(AndroidDevice)' == ''">$(DeviceId)</AndroidDevice>
+    <AndroidDevice Condition="'$(AndroidDevice)' == ''">$(DEVICE_ID)</AndroidDevice>
+    
+    <!-- Test results path on device (app private storage) -->
+    <_AndroidTestResultsDevicePath>files/TestResults</_AndroidTestResultsDevicePath>
+    
+    <!-- Local test results directory -->
+    <TestResultsDirectory Condition="'$(TestResultsDirectory)' == ''">$(OutputPath)TestResults</TestResultsDirectory>
+  </PropertyGroup>
+
+  <!--
+    Target: _ComputeAndroidTestRunArguments
+    Computes the arguments needed for running tests on Android device.
+    This follows the pattern suggested for Android SDK integration.
+  -->
+  <Target Name="_ComputeAndroidTestRunArguments"
+          BeforeTargets="_RunAndroidTests"
+          Condition="'$(_IsAndroidTestProject)' == 'true'">
+    
+    <PropertyGroup>
+      <!-- ADB device selector -->
+      <_AdbDeviceArg Condition="'$(AndroidDevice)' != ''">-s $(AndroidDevice)</_AdbDeviceArg>
+      
+      <!-- For MTP-based tests, we use dotnet run which handles deployment -->
+      <_AndroidRunCommand>&quot;$(DotnetDevicePath)&quot; run --project &quot;$(MSBuildProjectFullPath)&quot; -f $(TargetFramework)</_AndroidRunCommand>
+      <_AndroidRunCommand Condition="'$(AndroidDevice)' != ''">$(_AndroidRunCommand) --device $(AndroidDevice)</_AndroidRunCommand>
+    </PropertyGroup>
+
+    <Message Text="Android test configuration:" Importance="normal" />
+    <Message Text="  Device: $(AndroidDevice)" Importance="normal" Condition="'$(AndroidDevice)' != ''" />
+    <Message Text="  Package: $(ApplicationId)" Importance="normal" />
+    <Message Text="  Results: $(TestResultsDirectory)" Importance="normal" />
+  </Target>
+
+  <!--
+    Target: _RunAndroidTests
+    Deploys and runs tests on the Android device/emulator.
+  -->
+  <Target Name="_RunAndroidTests"
+          Condition="'$(_IsAndroidTestProject)' == 'true'">
+    
+    <PropertyGroup>
+      <_TestOutputFile>$(IntermediateOutputPath)android_test_output.txt</_TestOutputFile>
+    </PropertyGroup>
+
+    <Message Text="" Importance="high" />
+    <Message Text="Deploying and running tests on Android device..." Importance="high" />
+    
+    <!-- Run tests via dotnet run (handles APK deployment, launch, and logcat) -->
+    <Exec Command="$(_AndroidRunCommand) > &quot;$(_TestOutputFile)&quot; 2>&amp;1"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          IgnoreExitCode="true"
+          IgnoreStandardErrorWarningFormat="true">
+      <Output TaskParameter="ExitCode" PropertyName="_AndroidTestExitCode" />
+    </Exec>
+
+    <!-- Display filtered test output -->
+    <Exec Command="grep -E 'MTP\.|$(MSBuildProjectName):|Tests completed|exit code' &quot;$(_TestOutputFile)&quot; | sed 's/^.*I //' 1>&amp;2 || true"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          IgnoreExitCode="true"
+          IgnoreStandardErrorWarningFormat="true" />
+
+    <!-- Store exit code for later -->
+    <PropertyGroup>
+      <_DeviceTestExitCode>$(_AndroidTestExitCode)</_DeviceTestExitCode>
+    </PropertyGroup>
+  </Target>
+
+  <!--
+    Target: _PullAndroidTestResults
+    Pulls test results (TRX files) from the Android device after test execution.
+    Uses 'adb shell run-as' to access app private storage without root.
+  -->
+  <Target Name="_PullAndroidTestResults"
+          AfterTargets="_RunAndroidTests"
+          Condition="'$(_IsAndroidTestProject)' == 'true' AND '$(TestResultsDirectory)' != ''">
+    
+    <PropertyGroup>
+      <_AdbDeviceArg Condition="'$(AndroidDevice)' != ''">-s $(AndroidDevice)</_AdbDeviceArg>
+    </PropertyGroup>
+
+    <!-- Create local TestResults directory -->
+    <MakeDir Directories="$(TestResultsDirectory)" />
+
+    <Message Text="" Importance="high" />
+    <Message Text="Collecting test results from Android device..." Importance="high" />
+
+    <!-- Get the most recent TRX file name from device -->
+    <Exec Command="&quot;$(AdbToolPath)&quot; $(_AdbDeviceArg) shell &quot;run-as $(ApplicationId) ls -t $(_AndroidTestResultsDevicePath)/ 2>/dev/null | head -1&quot; | tr -d '\r'"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          IgnoreExitCode="true"
+          IgnoreStandardErrorWarningFormat="true"
+          ConsoleToMSBuild="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_LatestTrxFileName" />
+    </Exec>
+
+    <!-- Pull the TRX file using run-as + cat (works without root) -->
+    <Exec Command="&quot;$(AdbToolPath)&quot; $(_AdbDeviceArg) shell &quot;run-as $(ApplicationId) cat $(_AndroidTestResultsDevicePath)/$(_LatestTrxFileName)&quot; > &quot;$(TestResultsDirectory)/$(MSBuildProjectName).trx&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          IgnoreExitCode="true"
+          IgnoreStandardErrorWarningFormat="true"
+          Condition="'$(_LatestTrxFileName)' != '' AND $(_LatestTrxFileName.EndsWith('.trx'))" />
+
+    <!-- Report results location -->
+    <Message Text="Test results: $(TestResultsDirectory)/$(MSBuildProjectName).trx" Importance="high" 
+             Condition="'$(_LatestTrxFileName)' != '' AND $(_LatestTrxFileName.EndsWith('.trx'))" />
+  </Target>
+
+  <!--
+    Target: _ReportAndroidTestResults
+    Parses TRX file for actual test results and reports success/failure.
+  -->
+  <Target Name="_ReportAndroidTestResults"
+          AfterTargets="_PullAndroidTestResults"
+          Condition="'$(_IsAndroidTestProject)' == 'true'">
+    
+    <!-- Parse TRX to get test counts -->
+    <Exec Command="grep -o 'failed=&quot;[0-9]*&quot;' &quot;$(TestResultsDirectory)/$(MSBuildProjectName).trx&quot; 2>/dev/null | grep -o '[0-9]*' | head -1"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          IgnoreExitCode="true"
+          IgnoreStandardErrorWarningFormat="true"
+          ConsoleToMSBuild="true"
+          StandardOutputImportance="low"
+          Condition="Exists('$(TestResultsDirectory)/$(MSBuildProjectName).trx')">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_FailedTestCount" />
+    </Exec>
+
+    <Exec Command="grep -o 'passed=&quot;[0-9]*&quot;' &quot;$(TestResultsDirectory)/$(MSBuildProjectName).trx&quot; 2>/dev/null | grep -o '[0-9]*' | head -1"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          IgnoreExitCode="true"
+          IgnoreStandardErrorWarningFormat="true"
+          ConsoleToMSBuild="true"
+          StandardOutputImportance="low"
+          Condition="Exists('$(TestResultsDirectory)/$(MSBuildProjectName).trx')">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_PassedTestCount" />
+    </Exec>
+
+    <PropertyGroup>
+      <_FailedTestCount Condition="'$(_FailedTestCount)' == ''">0</_FailedTestCount>
+      <_PassedTestCount Condition="'$(_PassedTestCount)' == ''">0</_PassedTestCount>
+      <_TestsSucceeded Condition="'$(_FailedTestCount)' == '0'">true</_TestsSucceeded>
+    </PropertyGroup>
+
+    <Message Text="" Importance="high" />
+    <Message Text="══════════════════════════════════════════════════════════════" Importance="high" />
+    <Message Text="Test Results: $(_PassedTestCount) passed, $(_FailedTestCount) failed" Importance="high" />
+    <Message Text="══════════════════════════════════════════════════════════════" Importance="high" />
+    
+    <Error Text="Android tests failed: $(_FailedTestCount) test(s) failed" Condition="'$(_TestsSucceeded)' != 'true'" />
+  </Target>
+
+</Project>

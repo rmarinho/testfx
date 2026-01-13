@@ -1,16 +1,41 @@
 <Project>
+  <!--
+    Device Testing targets for Microsoft.Testing.Platform.
+    This file provides the common infrastructure and imports platform-specific targets.
+  -->
+
   <PropertyGroup>
+    <!-- Detect device test projects by target framework -->
     <_IsDeviceTestProject Condition="$(TargetFramework.Contains('android')) OR $(TargetFramework.Contains('ios'))">true</_IsDeviceTestProject>
+    
+    <!-- Use MSBuild test infrastructure for device projects -->
     <UseMSBuildTestInfrastructure Condition="'$(_IsDeviceTestProject)' == 'true'">true</UseMSBuildTestInfrastructure>
+    
+    <!-- Device selection (common property, can be set via -p:DeviceId or environment) -->
     <DeviceId Condition="'$(DeviceId)' == ''">$(DEVICE_ID)</DeviceId>
+    
+    <!-- Path to dotnet with device support (.NET 11+) -->
     <DotnetDevicePath Condition="'$(DotnetDevicePath)' == ''">$(DOTNET_DEVICE_PATH)</DotnetDevicePath>
     <DotnetDevicePath Condition="'$(DotnetDevicePath)' == ''">dotnet</DotnetDevicePath>
   </PropertyGroup>
 
+  <!-- Import platform-specific targets -->
+  <Import Project="Android.DeviceTest.targets" Condition="$(TargetFramework.Contains('android'))" />
+  <!-- Future: <Import Project="iOS.DeviceTest.targets" Condition="$(TargetFramework.Contains('ios'))" /> -->
+
+  <!--
+    Target: _MTPBeforeVSTest
+    Runs before VSTest to prepare for device testing.
+  -->
   <Target Name="_MTPBeforeVSTest" BeforeTargets="VSTest" Condition="'$(_IsDeviceTestProject)' == 'true'">
-    <Message Text="Device project detected, skipping MTP VSTest error check" Importance="low" />
+    <Message Text="Device test project detected ($(TargetFramework))" Importance="low" />
   </Target>
 
+  <!--
+    Target: VSTest (Override)
+    Overrides the standard VSTest target for device projects.
+    Instead of running tests locally, deploys to device and runs there.
+  -->
   <Target Name="VSTest" Condition="'$(_IsDeviceTestProject)' == 'true'">
     <Message Text="" Importance="high" />
     <Message Text="╔══════════════════════════════════════════════════════════════╗" Importance="high" />
@@ -22,74 +47,12 @@
     <Message Text="╚══════════════════════════════════════════════════════════════╝" Importance="high" />
     <Message Text="" Importance="high" />
     
+    <!-- Build if not skipped -->
     <CallTarget Targets="Build" Condition="'$(VSTestNoBuild)' != 'true'" />
-    <CallTarget Targets="_InvokeDeviceTestingPlatform" />
-  </Target>
-
-  <Target Name="_InvokeDeviceTestingPlatform">
-    <PropertyGroup>
-      <_DotnetRunArgs>run --project "$(MSBuildProjectFullPath)" -f $(TargetFramework)</_DotnetRunArgs>
-      <_DotnetRunArgs Condition="'$(DeviceId)' != ''">$(_DotnetRunArgs) --device $(DeviceId)</_DotnetRunArgs>
-      <_TestOutputFile>$(IntermediateOutputPath)device_test_output.txt</_TestOutputFile>
-      <_DeviceTestResultsPath>/data/user/0/$(ApplicationId)/files/TestResults</_DeviceTestResultsPath>
-      <_LocalTestResultsPath>$(OutputPath)TestResults</_LocalTestResultsPath>
-    </PropertyGroup>
-
-    <Message Text="Deploying and running tests on device..." Importance="high" />
     
-    <!-- Run dotnet run and capture output to a file -->
-    <Exec Command="&quot;$(DotnetDevicePath)&quot; $(_DotnetRunArgs) > &quot;$(_TestOutputFile)&quot; 2>&amp;1"
-          WorkingDirectory="$(MSBuildProjectDirectory)"
-          IgnoreExitCode="true"
-          IgnoreStandardErrorWarningFormat="true">
-      <Output TaskParameter="ExitCode" PropertyName="_DeviceTestExitCode" />
-    </Exec>
-
-    <!-- Filter and display test output directly to console (stderr goes through even at minimal verbosity) -->
-    <Exec Command="grep -E 'MTP\.|BlankAndroid:|Tests completed|exit code' &quot;$(_TestOutputFile)&quot; | sed 's/^.*I //' 1>&amp;2 || true"
-          WorkingDirectory="$(MSBuildProjectDirectory)"
-          IgnoreExitCode="true"
-          IgnoreStandardErrorWarningFormat="true" />
-
-    <!-- Collect test results from device -->
-    <CallTarget Targets="_CollectDeviceTestResults" />
-
-    <Message Text="" Importance="high" />
-    <Message Text="══════════════════════════════════════════════════════════════" Importance="high" />
-    <Message Text="Device test exit code: $(_DeviceTestExitCode)" Importance="high" Condition="'$(_DeviceTestExitCode)' == '0'" />
-    <Error Text="Device tests failed with exit code: $(_DeviceTestExitCode)" Condition="'$(_DeviceTestExitCode)' != '0'" />
+    <!-- Run platform-specific test execution -->
+    <CallTarget Targets="_RunAndroidTests" Condition="$(TargetFramework.Contains('android'))" />
+    <!-- Future: <CallTarget Targets="_RuniOSTests" Condition="$(TargetFramework.Contains('ios'))" /> -->
   </Target>
 
-  <Target Name="_CollectDeviceTestResults">
-    <PropertyGroup>
-      <_AdbDevice Condition="'$(DeviceId)' != ''">-s $(DeviceId)</_AdbDevice>
-      <_DeviceTestResultsPath>files/TestResults</_DeviceTestResultsPath>
-      <_LocalTestResultsPath>$(OutputPath)TestResults</_LocalTestResultsPath>
-    </PropertyGroup>
-
-    <!-- Create local TestResults directory -->
-    <MakeDir Directories="$(_LocalTestResultsPath)" />
-
-    <Message Text="" Importance="high" />
-    <Message Text="Collecting test results from device..." Importance="high" />
-
-    <!-- Get the most recent TRX file name -->
-    <Exec Command="adb $(_AdbDevice) shell &quot;run-as $(ApplicationId) ls -t $(_DeviceTestResultsPath)/ | head -1&quot; | tr -d '\r'"
-          WorkingDirectory="$(MSBuildProjectDirectory)"
-          IgnoreExitCode="true"
-          IgnoreStandardErrorWarningFormat="true"
-          ConsoleToMSBuild="true">
-      <Output TaskParameter="ConsoleOutput" PropertyName="_LatestTrxFileName" />
-    </Exec>
-
-    <!-- Pull the latest TRX file using run-as + cat -->
-    <Exec Command="adb $(_AdbDevice) shell &quot;run-as $(ApplicationId) cat $(_DeviceTestResultsPath)/$(_LatestTrxFileName)&quot; > &quot;$(_LocalTestResultsPath)/$(MSBuildProjectName).trx&quot;"
-          WorkingDirectory="$(MSBuildProjectDirectory)"
-          IgnoreExitCode="true"
-          IgnoreStandardErrorWarningFormat="true"
-          Condition="'$(_LatestTrxFileName)' != '' AND $(_LatestTrxFileName.EndsWith('.trx'))" />
-
-    <!-- Show result -->
-    <Message Text="Test results: $(_LocalTestResultsPath)/$(MSBuildProjectName).trx" Importance="high" Condition="'$(_LatestTrxFileName)' != '' AND $(_LatestTrxFileName.EndsWith('.trx'))" />
-  </Target>
 </Project>
