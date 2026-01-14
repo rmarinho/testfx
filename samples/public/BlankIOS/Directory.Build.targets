@@ -1,0 +1,29 @@
+<Project>
+  <!--
+    This Directory.Build.targets file imports the iOS device testing targets.
+    
+    In production, these targets would be imported automatically from the dotnet/ios SDK
+    when a project targets net*-ios and has IsTestProject=true.
+    
+    For development/testing, we import them from the local file.
+    
+    IMPORTANT: This file is imported AFTER NuGet package targets, so our target overrides
+    will take precedence over the MTP package's targets.
+  -->
+  
+  <!-- Set device test project flag -->
+  <PropertyGroup Condition="'$(TargetFramework)' != '' AND $(TargetFramework.Contains('ios'))">
+    <_IsDeviceTestProject>true</_IsDeviceTestProject>
+    <_IsIOSTestProject>true</_IsIOSTestProject>
+    <UseMSBuildTestInfrastructure>true</UseMSBuildTestInfrastructure>
+    <!-- Enable the new dotnet test experience -->
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+  </PropertyGroup>
+  
+  <!-- 
+    Import iOS device testing targets LAST so they override MTP's InvokeTestingPlatform target.
+    Directory.Build.targets is imported after all NuGet package targets.
+  -->
+  <Import Project="$(MSBuildThisFileDirectory)Sdk.DeviceTesting.iOS.targets"
+          Condition="'$(TargetFramework)' != '' AND $(TargetFramework.Contains('ios'))" />
+</Project>

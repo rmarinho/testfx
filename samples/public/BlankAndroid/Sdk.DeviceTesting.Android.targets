@@ -63,12 +63,13 @@
     <AndroidInstrumentationName Condition="'$(AndroidInstrumentationName)' == ''">$(_LowerRootNamespace).TestInstrumentation</AndroidInstrumentationName>
   </PropertyGroup>
 
-  <!-- Skip VSTest error for device projects -->
-  <Target Name="_MTPDeviceBeforeVSTest" BeforeTargets="_MTPBeforeVSTest" Condition="'$(_IsDeviceTestProject)' == 'true'">
-    <PropertyGroup>
-      <!-- Mark as device project to skip VSTest error -->
-      <_IsDeviceTestProject>true</_IsDeviceTestProject>
-    </PropertyGroup>
+  <!-- 
+    Skip VSTest error for device projects by overriding the _MTPBeforeVSTest target.
+    The original target throws an error for .NET 10+ with IsTestingPlatformApplication=true.
+    We override it completely to prevent the error since we handle device testing ourselves.
+  -->
+  <Target Name="_MTPBeforeVSTest" BeforeTargets="VSTest" Condition="'$(_IsDeviceTestProject)' == 'true'">
+    <Message Text="Device test project detected - skipping VSTest infrastructure, using device testing targets instead." Importance="low" />
   </Target>
 
   <!-- Override VSTest target for Android device projects -->

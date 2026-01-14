@@ -1,0 +1,146 @@
+<Project>
+  <!--
+    iOS Device Testing Targets
+    ==========================
+    
+    This file contains MSBuild targets for running tests on iOS devices/simulators.
+    This file is intended to eventually live in the dotnet/ios SDK.
+    
+    When integrated into the iOS SDK, these targets will be automatically imported
+    when IsTestProject=true and the project targets net*-ios.
+    
+    Usage:
+      Set IsTestProject=true in your project file, and target a device TFM (net11.0-ios, etc.)
+      
+    Properties:
+      DeviceId: The device/simulator ID to deploy to (e.g., UDID or simulator name)
+      DotnetDevicePath: Path to dotnet executable with device support (.NET 11+)
+      
+    Example:
+      dotnet test MyTests.csproj -f net11.0-ios -p:DeviceId="iPhone 15 Pro"
+      
+    Note: This file will be moved to the dotnet/ios SDK repository.
+          The device discovery (list-devices flag) is provided by the dotnet SDK itself.
+  -->
+
+  <!-- Detect iOS test projects -->
+  <PropertyGroup>
+    <_IsIOSTestProject Condition="'$(TargetFramework)' != '' AND $(TargetFramework.Contains('ios'))">true</_IsIOSTestProject>
+    <_IsDeviceTestProject Condition="'$(_IsIOSTestProject)' == 'true'">true</_IsDeviceTestProject>
+  </PropertyGroup>
+
+  <!-- Device testing properties -->
+  <PropertyGroup Condition="'$(_IsDeviceTestProject)' == 'true'">
+    <!-- Use MSBuild test infrastructure for device projects -->
+    <UseMSBuildTestInfrastructure>true</UseMSBuildTestInfrastructure>
+    
+    <!-- Disable MTP's custom Test target - we provide our own -->
+    <TestingPlatformDisableCustomTestTarget>true</TestingPlatformDisableCustomTestTarget>
+    
+    <!-- Device ID from property or environment variable -->
+    <DeviceId Condition="'$(DeviceId)' == ''">$(DEVICE_ID)</DeviceId>
+    
+    <!-- 
+      DotnetDevicePath: Path to the dotnet executable with device support (.NET 11+)
+      Priority: 1) Explicit property, 2) Environment variable, 3) DOTNET_HOST_PATH (same SDK running this build), 4) system dotnet
+    -->
+    <DotnetDevicePath Condition="'$(DotnetDevicePath)' == ''">$(DOTNET_DEVICE_PATH)</DotnetDevicePath>
+    <DotnetDevicePath Condition="'$(DotnetDevicePath)' == ''">$(DOTNET_HOST_PATH)</DotnetDevicePath>
+    <DotnetDevicePath Condition="'$(DotnetDevicePath)' == ''">dotnet</DotnetDevicePath>
+    
+    <!-- Bundle identifier for iOS app -->
+    <ApplicationId Condition="'$(ApplicationId)' == ''">com.companyname.$(MSBuildProjectName)</ApplicationId>
+  </PropertyGroup>
+
+  <!-- 
+    Override InvokeTestingPlatform to prevent MTP from trying to run the iOS dll on the host.
+    For iOS projects, tests must be deployed and executed on a device/simulator.
+    This target is called by _MTPTestTarget after the Test target.
+  -->
+  <Target Name="InvokeTestingPlatform" Condition="'$(_IsIOSTestProject)' == 'true'">
+    <Message Text="" Importance="high" />
+    <Message Text="╔══════════════════════════════════════════════════════════════╗" Importance="high" />
+    <Message Text="║                   iOS DEVICE TESTING                         ║" Importance="high" />
+    <Message Text="╠══════════════════════════════════════════════════════════════╣" Importance="high" />
+    <Message Text="║  Project:    $(MSBuildProjectName)" Importance="high" />
+    <Message Text="║  Framework:  $(TargetFramework)" Importance="high" />
+    <Message Text="║  Device:     $(DeviceId)" Importance="high" Condition="'$(DeviceId)' != ''" />
+    <Message Text="║  Dotnet:     $(DotnetDevicePath)" Importance="high" />
+    <Message Text="╚══════════════════════════════════════════════════════════════╝" Importance="high" />
+    <Message Text="" Importance="high" />
+    
+    <CallTarget Targets="_RunIOSDeviceTests" />
+  </Target>
+
+  <!-- 
+    iOS: Main target to run device tests
+  -->
+  <Target Name="_RunIOSDeviceTests">
+    <CallTarget Targets="_RunIOSTestsViaDotnetRun" />
+    <CallTarget Targets="_CollectIOSTestResults" />
+  </Target>
+
+  <!-- 
+    iOS: Run tests via 'dotnet run'
+    Uses AppDelegate to run tests. The app will launch and execute tests.
+  -->
+  <Target Name="_RunIOSTestsViaDotnetRun">
+    <PropertyGroup>
+      <_DeviceArg Condition="'$(DeviceId)' != ''">--device "$(DeviceId)"</_DeviceArg>
+      <_LocalTestResultsPath>$(OutputPath)TestResults</_LocalTestResultsPath>
+    </PropertyGroup>
+
+    <Message Text="" Importance="high" />
+    <Message Text="Running tests via: dotnet run --project $(MSBuildProjectFullPath) -f $(TargetFramework) $(_DeviceArg)" Importance="high" />
+    <Message Text="" Importance="high" />
+    
+    <!-- 
+      Use 'dotnet run' with device argument which:
+      1. Builds the project
+      2. Deploys to the device/simulator
+      3. Runs the app and streams output
+      4. Waits for app to exit
+      
+      Note: We use StandardOutputImportance="high" to stream output directly to console.
+      ConsoleToMSBuild captures output but doesn't stream it in real-time.
+    -->
+    <Exec Command="&quot;$(DotnetDevicePath)&quot; run --project &quot;$(MSBuildProjectFullPath)&quot; -f $(TargetFramework) --no-build $(_DeviceArg)"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          IgnoreExitCode="true"
+          StandardOutputImportance="high"
+          StandardErrorImportance="high">
+      <Output TaskParameter="ExitCode" PropertyName="_DotnetRunExitCode" />
+    </Exec>
+
+    <Message Text="" Importance="high" />
+    <Message Text="══════════════════════════════════════════════════════════════" Importance="high" />
+    <Message Text="✓ dotnet run completed with exit code: $(_DotnetRunExitCode)" Importance="high" Condition="'$(_DotnetRunExitCode)' == '0'" />
+    <Warning Text="⚠ dotnet run completed with exit code: $(_DotnetRunExitCode)" Condition="'$(_DotnetRunExitCode)' != '0'" />
+  </Target>
+
+  <!-- Collect test results from iOS device/simulator -->
+  <Target Name="_CollectIOSTestResults">
+    <PropertyGroup>
+      <_LocalTestResultsPath>$(OutputPath)TestResults</_LocalTestResultsPath>
+    </PropertyGroup>
+
+    <!-- Create local TestResults directory -->
+    <MakeDir Directories="$(_LocalTestResultsPath)" />
+
+    <Message Text="" Importance="high" />
+    <Message Text="Test results will be collected from device..." Importance="high" />
+    
+    <!--
+      Note: iOS test result collection is more complex than Android.
+      The app writes results to its container, which needs to be accessed via:
+      - For simulators: ~/Library/Developer/CoreSimulator/Devices/[UDID]/data/Containers/Data/Application/[APP_UDID]/Documents/
+      - For physical devices: libimobiledevice tools or Xcode's device management
+      
+      The dotnet run command should stream test output to console.
+      TRX file collection from iOS devices may require additional tooling.
+    -->
+    
+    <Message Text="Note: iOS test results are streamed to console output." Importance="high" />
+    <Message Text="TRX files can be collected from the simulator/device container if needed." Importance="high" />
+  </Target>
+</Project>

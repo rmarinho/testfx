@@ -1,0 +1,27 @@
+<Project>
+  <!-- Inherit from parent -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <!-- 
+    Set device test project properties EARLY (in props, before targets are evaluated).
+    This ensures VSTest and MTP targets see these properties before they make decisions.
+  -->
+  <PropertyGroup Condition="'$(TargetFramework)' != '' AND $(TargetFramework.Contains('ios'))">
+    <_IsDeviceTestProject>true</_IsDeviceTestProject>
+    <_IsIOSTestProject>true</_IsIOSTestProject>
+    
+    <!-- 
+      IMPORTANT: Set IsTestingPlatformApplication=false for device projects.
+      This prevents the MTP package from throwing the VSTest error for .NET 10+ SDK.
+      MTP will still work on the device since the app runs MicrosoftTestingPlatformEntryPoint.Main().
+    -->
+    <IsTestingPlatformApplication>false</IsTestingPlatformApplication>
+    
+    <!-- Use MSBuild test infrastructure instead of InvokeTestingPlatform -->
+    <UseMSBuildTestInfrastructure>true</UseMSBuildTestInfrastructure>
+    <!-- Enable dotnet test support (overrides VSTest target) -->
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+    <!-- Disable the custom Test target from MTP - we provide our own -->
+    <TestingPlatformDisableCustomTestTarget>true</TestingPlatformDisableCustomTestTarget>
+  </PropertyGroup>
+</Project>

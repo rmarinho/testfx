@@ -1,6 +1,5 @@
 using BlankIOS;
 
 // This is the main entry point of the application.
-// If you want to use a different Application Delegate class from "AppDelegate"
-// you can specify it here.
+// For test projects, we launch the app which runs tests in AppDelegate.FinishedLaunching
 UIApplication.Main (args, null, typeof (AppDelegate));
